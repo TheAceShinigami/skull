@@ -1,0 +1,16 @@
+[package]
+name = "skull"
+version = "0.1.0"
+authors = ["thebarbershaveshimself <ace8@me.com>"]
+edition = "2018"
+
+[lib]
+name = "skull_core"
+
+[dependencies]
+rand = "0.7"
+bitvec = "0.17.2"
+bulletproofs = "2"
+curve25519-dalek = "2"
+sha2 = "0.8.1"
+lazy_static = "1.4.0"
