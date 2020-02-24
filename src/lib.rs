@@ -1,20 +1,13 @@
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha512};
+use merlin::Transcript;
+use bulletproofs::{BulletproofGens, PedersenGens, RangeProof};
 
 #[derive(Copy, Clone)]
 pub enum Card {
     Skull,
     Rose,
-}
-
-impl Card {
-    fn to_scalar(self) -> Scalar {
-        match self {
-            Card::Skull => Scalar::one(),
-            Card::Rose => Scalar::zero(),
-        }
-    }
 }
 
 #[derive(Copy, Clone)]
@@ -63,31 +56,7 @@ pub fn check_schnorr_signature(
     Scalar::from_hash(hasher) == sig.e
 }
 
-pub fn commit(gh: (RistrettoPoint, RistrettoPoint), c: Card) -> (Commitment, Revelation) {
-    let (g, h) = gh;
-    let r = Scalar::random(&mut OsRng);
-    let commitment = Commitment(g * c.to_scalar() + r * h);
-    (commitment, Revelation { r: r, c: c })
-}
 
-pub fn decommit(gh: (RistrettoPoint, RistrettoPoint), com: Commitment, rev: Revelation) -> bool {
-    let (g, h) = gh;
-    let (r, c) = (rev.r, rev.c);
-    com.0 == Commitment(g * c.to_scalar() + r * h).0
-}
-
-pub fn commit_deck(
-    gh: (RistrettoPoint, RistrettoPoint),
-    d: &[Card],
-) -> (Vec<Commitment>, Vec<Revelation>) {
-    let mut coms = Vec::<Commitment>::with_capacity(d.len());
-    let mut revs = Vec::<Revelation>::with_capacity(d.len());
-    for (com, rev) in d.into_iter().map(|x| commit(gh, *x)) {
-        revs.push(rev);
-        coms.push(com);
-    }
-    (coms, revs)
-}
 
 pub const DEFAULT_DECK: [Card; 4] = [Card::Skull, Card::Rose, Card::Rose, Card::Rose];
 
@@ -96,29 +65,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sign_fair_deck() {
-        let gh = init_gh();
-        let (_g, h) = gh;
-        let (coms, revs) = commit_deck(gh, &DEFAULT_DECK);
-        for (&com, &rev) in coms.iter().zip(revs.iter()) {
-            assert!(decommit(gh, com, rev));
-        }
-        let rs: Vec<Scalar> = revs.iter().map(|x| x.r).collect();
-        let sig = schnorr_sign(h, &rs);
-        assert!(check_schnorr_signature(gh, &coms, sig));
-    }
+    fn bulletproof() {
+        let pc_gens = PedersenGens::default();
+        let bp_gens = BulletproofGens::new(8, 1);
+        let secret = 0u64;
+        let blinding = Scalar::random(&mut OsRng);
 
-    #[test]
-    fn sign_cheat_deck() {
-        const CHEAT_DECK: [Card; 4] = [Card::Skull, Card::Skull, Card::Rose, Card::Rose];
-        let gh = init_gh();
-        let (_g, h) = gh;
-        let (coms, revs) = commit_deck(gh, &CHEAT_DECK);
-        for (&com, &rev) in coms.iter().zip(revs.iter()) {
-            assert!(decommit(gh, com, rev));
-        }
-        let rs: Vec<Scalar> = revs.iter().map(|x| x.r).collect();
-        let sig = schnorr_sign(h, &rs);
-        assert!(!check_schnorr_signature(gh, &coms, sig));
+        let mut prover_transcript = Transcript::new(b"doctest example");
+        let (proof, committed_value) = RangeProof::prove_single(
+            &bp_gens,
+            &pc_gens,
+            &mut prover_transcript,
+            secret,
+            &blinding,
+            8,
+        )
+        .expect("oopsie");
+        let mut verifier_transcript = Transcript::new(b"doctest example");
+        assert!(proof
+            .verify_single(
+                &bp_gens,
+                &pc_gens,
+                &mut verifier_transcript,
+                &committed_value,
+                8,
+            )
+            .is_ok());
+        assert!(pc_gens.commit(Scalar::zero(), blinding).compress() == committed_value); 
     }
 }
